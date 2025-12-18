@@ -382,6 +382,412 @@ racksdb_version = 0.5.0
 
 ---
 
+## Frontend API 呼叫機制
+
+Frontend 使用 Vue 3 Composition API 搭配 Axios 進行 API 呼叫，採用分層架構設計。
+
+### 呼叫架構
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Vue Component                                │
+│  (JobsView.vue, NodesView.vue, DashboardView.vue...)                │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    useClusterDataPoller                              │
+│  (自動輪詢 + 生命週期管理)                                            │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      useGatewayAPI                                   │
+│  (高階 API 函式: jobs(), nodes(), stats()...)                        │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                       useRESTAPI                                     │
+│  (HTTP 請求封裝: get(), post() + 錯誤處理)                           │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                       useHttp (Axios)                                │
+│  (底層 HTTP 客戶端 + baseURL 配置)                                    │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+                           Gateway API
+```
+
+### 相關檔案
+
+| 檔案 | 說明 |
+|------|------|
+| `frontend/src/plugins/http.ts` | Axios 實例建立與注入 |
+| `frontend/src/composables/RESTAPI.ts` | REST API 請求封裝 |
+| `frontend/src/composables/GatewayAPI.ts` | Gateway API 高階函式 |
+| `frontend/src/composables/DataPoller.ts` | 資料輪詢機制 |
+| `frontend/src/stores/auth.ts` | 認證狀態管理 (Pinia) |
+
+### HTTP 客戶端層
+
+**檔案**: `frontend/src/plugins/http.ts`
+
+```typescript
+import axios from 'axios'
+import type { AxiosInstance } from 'axios'
+
+const injectionKey = Symbol('http')
+
+// Vue Composable 取得 Axios 實例
+export const useHttp = () => inject(injectionKey) as AxiosInstance
+
+export const httpPlugin: Plugin = {
+  install(app: App) {
+    // 建立 Axios 實例，baseURL 來自執行時配置 (/config.json)
+    const http = axios.create({
+      baseURL: `${app.config.globalProperties.$rc.api_server}/api/`
+    })
+    app.provide(injectionKey, http)
+  }
+}
+```
+
+### REST API 封裝層
+
+**檔案**: `frontend/src/composables/RESTAPI.ts`
+
+```typescript
+export function useRESTAPI() {
+  const http = useHttp()
+  const authStore = useAuthStore()
+  let controller = new AbortController()  // 用於取消請求
+
+  // 建立請求配置（自動附加 Token）
+  function requestConfig(withToken: boolean = true): AxiosRequestConfig {
+    const config: AxiosRequestConfig = {
+      signal: controller.signal
+    }
+    if (withToken === true) {
+      config.headers = { Authorization: `Bearer ${authStore.token}` }
+    }
+    return config
+  }
+
+  // 統一錯誤處理
+  async function requestServer(func: () => Promise<AxiosResponse>): Promise<AxiosResponse> {
+    try {
+      return await func()
+    } catch (error) {
+      if (error.response.status == 401) {
+        throw new AuthenticationError(error.response.data.description)
+      } else if (error.response.status == 403) {
+        throw new PermissionError(error.message)
+      } else {
+        throw new APIServerError(error.response.status, error.response.data.description)
+      }
+    }
+  }
+
+  // GET 請求
+  async function get<CType>(resource: string, withToken: boolean = true): Promise<CType> {
+    console.log(`Slurm-web gateway API get ${resource}`)
+    return (await requestServer(() => http.get(resource, requestConfig(withToken)))).data
+  }
+
+  // POST 請求
+  async function post<CType>(resource: string, data: unknown, withToken: boolean = true): Promise<CType> {
+    console.log(`Slurm-web gateway API post ${resource}`)
+    return (await requestServer(() => http.post(resource, data, requestConfig(withToken)))).data
+  }
+
+  // 取消所有進行中的請求
+  function abortController() {
+    controller.abort()
+    controller = new AbortController()
+  }
+
+  return { get, post, postRaw, abortController }
+}
+```
+
+### Gateway API 高階函式
+
+**檔案**: `frontend/src/composables/GatewayAPI.ts`
+
+提供針對每個 API 端點的型別安全函式：
+
+```typescript
+export function useGatewayAPI() {
+  const restAPI = useRESTAPI()
+
+  // 認證相關
+  async function login(idents: { user: string, password: string }): Promise<GatewayLoginResponse> {
+    return await restAPI.post('/login', idents, false)  // 不帶 Token
+  }
+
+  async function anonymousLogin(): Promise<GatewayAnonymousLoginResponse> {
+    return await restAPI.get('/anonymous', false)
+  }
+
+  // 叢集相關
+  async function clusters(): Promise<ClusterDescription[]> {
+    return await restAPI.get('/clusters')
+  }
+
+  async function ping(cluster: string): Promise<ClusterPingResponse> {
+    return await restAPI.get(`/agents/${cluster}/ping`)
+  }
+
+  async function stats(cluster: string): Promise<ClusterStats> {
+    return await restAPI.get(`/agents/${cluster}/stats`)
+  }
+
+  // 工作相關
+  async function jobs(cluster: string, node?: string): Promise<ClusterJob[]> {
+    if (node) return await restAPI.get(`/agents/${cluster}/jobs?node=${node}`)
+    return await restAPI.get(`/agents/${cluster}/jobs`)
+  }
+
+  async function job(cluster: string, jobId: number): Promise<ClusterIndividualJob> {
+    return await restAPI.get(`/agents/${cluster}/job/${jobId}`)
+  }
+
+  // 節點相關
+  async function nodes(cluster: string): Promise<ClusterNode[]> {
+    return await restAPI.get(`/agents/${cluster}/nodes`)
+  }
+
+  async function node(cluster: string, nodeName: string): Promise<ClusterIndividualNode> {
+    return await restAPI.get(`/agents/${cluster}/node/${nodeName}`)
+  }
+
+  // 其他資源
+  async function partitions(cluster: string): Promise<ClusterPartition[]> {
+    return await restAPI.get(`/agents/${cluster}/partitions`)
+  }
+
+  async function qos(cluster: string): Promise<ClusterQos[]> {
+    return await restAPI.get(`/agents/${cluster}/qos`)
+  }
+
+  // Metrics
+  async function metrics_nodes(cluster: string, range: string): Promise<Record<string, MetricValue[]>> {
+    return await restAPI.get(`/agents/${cluster}/metrics/nodes?range=${range}`)
+  }
+
+  // 快取管理
+  async function cache_reset(cluster: string): Promise<CacheStatistics> {
+    return await restAPI.post(`/agents/${cluster}/cache/reset`, {})
+  }
+
+  return {
+    login, anonymousLogin, clusters, ping, stats,
+    jobs, job, nodes, node, partitions, qos,
+    metrics_nodes, cache_reset, /* ... */
+  }
+}
+```
+
+### 認證狀態管理
+
+**檔案**: `frontend/src/stores/auth.ts`
+
+```typescript
+export const useAuthStore = defineStore('auth', () => {
+  // 從 localStorage 恢復狀態（保持登入）
+  const token = ref(localStorage.getItem('token'))
+  const username = ref(localStorage.getItem('username'))
+  const fullname = ref(localStorage.getItem('fullname'))
+  const groups = ref(JSON.parse(localStorage.getItem('groups') || '[]'))
+
+  function login(_token: string, _username: string, _fullname: string, _groups: string[]) {
+    // 更新 Pinia 狀態
+    token.value = _token
+    username.value = _username
+    fullname.value = _fullname
+    groups.value = _groups
+
+    // 持久化到 localStorage
+    localStorage.setItem('token', _token)
+    localStorage.setItem('username', _username)
+    localStorage.setItem('fullname', _fullname)
+    localStorage.setItem('groups', JSON.stringify(_groups))
+
+    // 重定向到目標頁面
+    router.push(returnUrl.value || { name: 'clusters' })
+  }
+
+  function logout() {
+    token.value = null
+    localStorage.removeItem('token')
+    localStorage.removeItem('username')
+    localStorage.removeItem('fullname')
+    localStorage.removeItem('groups')
+  }
+
+  return { token, username, fullname, groups, login, anonymousLogin, logout }
+})
+```
+
+### 資料輪詢機制
+
+**檔案**: `frontend/src/composables/DataPoller.ts`
+
+自動定時取得資料並整合 Vue 生命週期：
+
+```typescript
+export function useClusterDataPoller<Type>(
+  cluster: string,
+  initialCallback: GatewayAnyClusterApiKey,
+  timeout: number,        // 輪詢間隔（毫秒）
+  initialOtherParam?: number | string
+): ClusterDataPoller<Type> {
+  const data = ref<Type>()
+  const unable = ref(false)
+  const loaded = ref(false)
+  const gateway = useGatewayAPI()
+
+  async function poll() {
+    try {
+      unable.value = false
+      // 動態呼叫對應的 API 函式
+      data.value = await gateway[callback](cluster, otherParam)
+      loaded.value = true
+    } catch (error) {
+      if (error instanceof AuthenticationError) {
+        reportAuthenticationError(error)
+      } else if (error instanceof PermissionError) {
+        stop()
+        unable.value = true
+      }
+    }
+  }
+
+  async function start() {
+    console.log(`Start polling ${callback} on cluster ${cluster}`)
+    await poll()
+    if (!_stop) {
+      _timeout = window.setTimeout(start, timeout)  // 遞迴輪詢
+    }
+  }
+
+  function stop() {
+    console.log(`Stop polling ${callback}`)
+    clearTimeout(_timeout)
+    gateway.abort()  // 取消進行中的請求
+  }
+
+  // 整合 Vue 生命週期
+  onMounted(() => start())
+  onUnmounted(() => stop())
+
+  return { data, unable, loaded, setCluster, setCallback, setParam }
+}
+```
+
+**使用範例**:
+
+```typescript
+// 在 Vue 組件中使用
+const { data: jobs, loaded, unable } = useClusterDataPoller<ClusterJob[]>(
+  'mycluster',   // 叢集名稱
+  'jobs',        // API 函式名稱
+  5000           // 每 5 秒輪詢
+)
+
+// 在 template 中使用
+// <div v-if="loaded">
+//   <JobCard v-for="job in jobs" :key="job.job_id" :job="job" />
+// </div>
+```
+
+### 完整請求流程範例
+
+以取得工作列表為例：
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  JobsView.vue                                                        │
+│  const { data } = useClusterDataPoller('cluster1', 'jobs', 5000)    │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  DataPoller.ts                                                       │
+│  await gateway.jobs('cluster1')                                      │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  GatewayAPI.ts                                                       │
+│  await restAPI.get('/agents/cluster1/jobs')                         │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  RESTAPI.ts                                                          │
+│  http.get('/agents/cluster1/jobs', {                                │
+│    headers: { Authorization: 'Bearer eyJhbGciOiJIUzI1NiIs...' }     │
+│  })                                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Axios HTTP Request                                                  │
+│  GET https://gateway.example.com:5011/api/agents/cluster1/jobs      │
+│  Authorization: Bearer eyJhbGciOiJIUzI1NiIs...                      │
+└─────────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+                        Gateway (Flask) → Agent → slurmrestd
+```
+
+### 錯誤處理
+
+**檔案**: `frontend/src/composables/HTTPErrors.ts`
+
+```typescript
+export class AuthenticationError extends Error { }  // HTTP 401
+export class PermissionError extends Error { }      // HTTP 403
+export class APIServerError extends Error {         // HTTP 4xx/5xx
+  constructor(public status: number, message: string) {
+    super(message)
+  }
+}
+export class CanceledRequestError extends Error { } // 請求被取消
+export class RequestError extends Error { }         // 網路錯誤
+```
+
+**錯誤處理流程**:
+
+| HTTP 狀態碼 | 例外類別 | 處理方式 |
+|-------------|----------|----------|
+| 401 | `AuthenticationError` | 重定向到登入頁 |
+| 403 | `PermissionError` | 顯示權限不足訊息，停止輪詢 |
+| 4xx/5xx | `APIServerError` | 顯示錯誤訊息 |
+| 網路錯誤 | `RequestError` | 顯示連線錯誤 |
+| 取消 | `CanceledRequestError` | 忽略（正常行為） |
+
+### Frontend API 設計特點
+
+| 特點 | 說明 |
+|------|------|
+| **Composable 模式** | 使用 Vue 3 Composition API，邏輯可重用 |
+| **分層架構** | HTTP → RESTAPI → GatewayAPI → DataPoller |
+| **自動 Token 管理** | Token 持久化 + 自動附加到請求 |
+| **統一錯誤處理** | 所有 HTTP 錯誤集中處理並轉換為型別化例外 |
+| **請求取消支援** | 切換頁面/叢集時自動取消進行中的請求 |
+| **自動輪詢** | DataPoller 自動定時重新取得資料 |
+| **生命週期整合** | 組件掛載時開始輪詢，卸載時自動停止 |
+| **TypeScript 型別** | 完整的型別定義，確保 API 回應型別安全 |
+| **響應式狀態** | 使用 Vue ref()，資料變更自動觸發 UI 更新 |
+
+---
+
 ## Agent 核心模組
 
 ### 檔案結構
