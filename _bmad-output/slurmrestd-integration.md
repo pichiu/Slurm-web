@@ -6,7 +6,8 @@ Slurm-web 透過 **slurmrestd** (Slurm REST API Daemon) 與 Slurm 叢集進行�
 
 本文件深入探討 Slurm-web 如何實作這個通訊層，包括：
 - 通訊架構與資料流
-- 核心模組分析
+- Gateway 代理機制
+- Agent 核心模組分析
 - 認證機制
 - 版本適配策略
 - 快取機制
@@ -67,7 +68,321 @@ Slurm-web 透過 **slurmrestd** (Slurm REST API Daemon) 與 Slurm 叢集進行�
 
 ---
 
-## 核心模組
+## Gateway 代理機制
+
+Gateway 作為中央入口點，負責將 Frontend 的請求代理轉發到對應的 Agent。這使得 Frontend 只需連接單一端點，即可存取多個 Slurm 叢集。
+
+### 代理架構概覽
+
+```
+┌─────────────┐         ┌─────────────┐         ┌─────────────┐
+│   Frontend  │ ──────> │   Gateway   │ ──────> │   Agent 1   │
+│             │         │             │ ──────> │   Agent 2   │
+│             │         │             │ ──────> │   Agent N   │
+└─────────────┘         └─────────────┘         └─────────────┘
+     HTTP                   aiohttp                  HTTP
+   (同步)                  (非同步)                (同步)
+```
+
+### 相關檔案
+
+| 檔案 | 說明 |
+|------|------|
+| `slurmweb/apps/gateway.py` | Gateway 應用程式與 Agent 管理 |
+| `slurmweb/views/gateway.py` | Gateway 視圖函數與代理邏輯 |
+
+### Agent 資訊管理
+
+**檔案**: `slurmweb/apps/gateway.py:45-77`
+
+Gateway 維護一個 Agent 資訊字典，記錄每個叢集的連線資訊：
+
+```python
+class SlurmwebAgent:
+    """代表一個遠端 Agent 的連線資訊"""
+    def __init__(self, version, cluster, racksdb, metrics, cache, url):
+        self.version = version      # Agent API 版本
+        self.cluster = cluster      # 叢集名稱（唯一識別碼）
+        self.metrics = metrics      # 是否啟用 Prometheus metrics
+        self.cache = cache          # 是否啟用 Redis 快取
+        self.racksdb = racksdb      # RacksDB 設定
+        self.url = url              # Agent URL（如 https://agent1:5012）
+
+    @classmethod
+    def from_json(cls, url, data):
+        """從 Agent /info 端點的 JSON 回應建立實例"""
+        return cls(
+            data["version"],
+            data["cluster"],
+            SlurmwebAgentRacksDBSettings(**data["racksdb"]),
+            data["metrics"],
+            data["cache"],
+            url,
+        )
+```
+
+### Agent 探索機制
+
+**檔案**: `slurmweb/apps/gateway.py:156-239`
+
+Gateway 使用 **aiohttp** 非同步並行查詢所有配置的 Agent：
+
+```python
+async def _get_agent_info(self, url) -> SlurmwebAgent:
+    """從單一 Agent 取得資訊"""
+    async with aiohttp.ClientSession(
+        connector=self.get_agent_connector()
+    ) as session:
+        async with session.get(f"{url}/info") as response:
+            if response.status != 200:
+                raise SlurmwebAgentError(f"unexpected status code {response.status}")
+            agent = SlurmwebAgent.from_json(url, await response.json())
+
+    # 檢查 Agent 版本是否符合最低要求
+    if not version_greater_or_equal(self.settings.agents.version, agent.version):
+        logger.error("Unsupported agent version %s", agent.version)
+        return None
+
+    return agent
+
+async def _get_agents_info(self):
+    """並行取得所有 Agent 資訊"""
+    return {
+        agent.cluster: agent
+        for agent in await asyncio.gather(
+            *[self._get_agent_info(url.geturl()) for url in self.settings.agents.url]
+        )
+        if agent is not None
+    }
+
+@property
+def agents(self):
+    """取得 Agent 資訊（5 分鐘快取）"""
+    if int(time.time()) < self._agents_timeout:
+        return self._agents
+
+    self._agents = asyncio_run(self._get_agents_info())
+    self._agents_timeout = int(time.time()) + 300  # 5 分鐘後過期
+    return self._agents
+```
+
+### 路由定義
+
+**檔案**: `slurmweb/apps/gateway.py:112-140`
+
+所有代理端點都以 `/api/agents/<cluster>/` 開頭：
+
+```python
+VIEWS = {
+    # 直接 Gateway 端點
+    SlurmwebAppRoute("/api/version", views.version),
+    SlurmwebAppRoute("/api/login", views.login, methods=["POST"]),
+    SlurmwebAppRoute("/api/clusters", views.clusters),
+
+    # 代理到 Agent 的端點
+    SlurmwebAppRoute("/api/agents/<cluster>/ping", views.ping),
+    SlurmwebAppRoute("/api/agents/<cluster>/stats", views.stats),
+    SlurmwebAppRoute("/api/agents/<cluster>/jobs", views.jobs),
+    SlurmwebAppRoute("/api/agents/<cluster>/job/<int:job>", views.job),
+    SlurmwebAppRoute("/api/agents/<cluster>/nodes", views.nodes),
+    SlurmwebAppRoute("/api/agents/<cluster>/node/<name>", views.node),
+    SlurmwebAppRoute("/api/agents/<cluster>/partitions", views.partitions),
+    SlurmwebAppRoute("/api/agents/<cluster>/qos", views.qos),
+    SlurmwebAppRoute("/api/agents/<cluster>/reservations", views.reservations),
+    SlurmwebAppRoute("/api/agents/<cluster>/accounts", views.accounts),
+    SlurmwebAppRoute("/api/agents/<cluster>/associations", views.associations),
+    SlurmwebAppRoute("/api/agents/<cluster>/racksdb/<path:query>", views.racksdb, methods=["GET", "POST"]),
+}
+```
+
+### 驗證裝飾器
+
+**檔案**: `slurmweb/views/gateway.py:27-41`
+
+每個代理視圖使用兩個裝飾器確保安全性：
+
+```python
+def validate_cluster(view):
+    """驗證 cluster 參數是否對應到有效的 Agent"""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        cluster = kwargs["cluster"]
+        if cluster not in current_app.agents.keys():
+            abort(404, f"cluster {cluster} not found")
+        return view(*args, **kwargs)
+    return wrapped
+
+# 使用範例
+@check_jwt           # 1. 驗證使用者 JWT Token
+@validate_cluster    # 2. 驗證叢集存在
+def jobs(cluster: str):
+    return proxy_agent(cluster, "jobs", request.token)
+```
+
+### 核心代理函式
+
+**檔案**: `slurmweb/views/gateway.py:192-264`
+
+#### request_agent - 建立 Agent 請求
+
+```python
+def request_agent(
+    session: aiohttp.ClientSession,
+    cluster: str,
+    query: str,
+    token: str = None,
+    with_version: bool = True,
+):
+    """建立對 Agent 的 aiohttp 請求"""
+    # 1. 設定認證 Header（轉發使用者 Token）
+    headers = {}
+    if token is not None:
+        headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. 組裝目標 URL
+    if with_version:
+        url = f"{current_app.agents[cluster].url}/v{current_app.agents[cluster].version}/{query}"
+    else:
+        url = f"{current_app.agents[cluster].url}/{query}"
+
+    # 3. 轉發 Query String
+    if len(request.query_string):
+        url += f"?{request.query_string.decode()}"
+
+    # 4. 根據 HTTP 方法發送請求
+    if request.method == "GET":
+        return session.get(url, headers=headers)
+    elif request.method == "POST":
+        return session.post(url, headers=headers, json=request.json)
+```
+
+#### async_proxy_agent - 非同步代理執行
+
+```python
+async def async_proxy_agent(
+    cluster: str,
+    query: str,
+    token: str = None,
+    json: bool = True,
+    with_version: bool = True,
+):
+    """非同步代理請求到 Agent 並回傳 Flask Response"""
+    async with aiohttp.ClientSession(
+        connector=current_app.get_agent_connector()
+    ) as session:
+        async with request_agent(session, cluster, query, token, with_version) as response:
+            if json:
+                # JSON 回應：解析並重新包裝
+                return jsonify(await response.json()), response.status
+            else:
+                # 二進位回應（如 RacksDB 圖片）：直接轉發
+                return Response(
+                    await response.read(),
+                    status=response.status,
+                    mimetype=response.headers.get("content-type"),
+                )
+
+def proxy_agent(*args, **kwargs):
+    """同步包裝器 - 在 Flask 同步環境中執行非同步代理"""
+    return asyncio_run(async_proxy_agent(*args, **kwargs))
+```
+
+### 代理請求完整流程
+
+```
+Frontend                    Gateway                         Agent
+   │                          │                               │
+   │  GET /api/agents/        │                               │
+   │  cluster1/jobs           │                               │
+   │  Authorization: Bearer   │                               │
+   │  {user_token}            │                               │
+   │─────────────────────────>│                               │
+   │                          │                               │
+   │                     1. @check_jwt                        │
+   │                        驗證 user_token                   │
+   │                          │                               │
+   │                     2. @validate_cluster                 │
+   │                        檢查 "cluster1" ∈ agents          │
+   │                          │                               │
+   │                     3. proxy_agent("cluster1", "jobs")   │
+   │                        └─> async_proxy_agent()           │
+   │                            └─> request_agent()           │
+   │                          │                               │
+   │                          │  GET /v6/jobs                 │
+   │                          │  Authorization: Bearer        │
+   │                          │  {user_token}                 │
+   │                          │──────────────────────────────>│
+   │                          │                               │
+   │                          │                          @check_jwt
+   │                          │                          @rbac_action("view-jobs")
+   │                          │                          slurmrestd.jobs()
+   │                          │                               │
+   │                          │<──────────────────────────────│
+   │                          │  [jobs data]                  │
+   │                          │                               │
+   │<─────────────────────────│                               │
+   │  [jobs data]             │                               │
+```
+
+### SSL/TLS 支援
+
+**檔案**: `slurmweb/apps/gateway.py:142-154`
+
+Gateway 支援自訂 CA 憑證，用於連接使用自簽憑證的 Agent：
+
+```python
+def get_agent_connector(self):
+    """取得帶 SSL 設定的 aiohttp 連接器"""
+    if not self.settings.agents.cacert:
+        return None
+
+    if not self.settings.agents.cacert.is_file():
+        raise SlurmwebConfigurationError(
+            f"Agent CA certificate file {self.settings.agents.cacert} not found"
+        )
+    return aiohttp.TCPConnector(
+        ssl=ssl.create_default_context(cafile=str(self.settings.agents.cacert))
+    )
+```
+
+### Gateway 代理機制特性總結
+
+| 特性 | 說明 |
+|------|------|
+| **非同步 I/O** | 使用 aiohttp 進行非阻塞請求，提高並發效能 |
+| **Token 轉發** | 將使用者 JWT Token 原封不動轉發給 Agent |
+| **SSL/TLS 支援** | 可配置自訂 CA 憑證連接自簽 Agent |
+| **Query String 轉發** | 保留原始請求參數（如 `?node=xxx`） |
+| **多方法支援** | 支援 GET 和 POST 方法 |
+| **Agent 資訊快取** | Agent 資訊快取 5 分鐘，減少探測開銷 |
+| **版本化 URL** | 自動根據 Agent 版本組裝正確的 API 路徑 |
+| **叢集驗證** | 請求前驗證目標叢集是否可用 |
+
+### Gateway 配置
+
+```ini
+# /etc/slurm-web/gateway.ini
+
+[agents]
+# 定義所有 Agent URL
+url =
+  https://cluster1.example.com:5012
+  https://cluster2.example.com:5012
+  https://cluster3.example.com:5012
+
+# 自訂 CA 憑證（用於自簽憑證）
+cacert = /etc/slurm-web/agents-ca.crt
+
+# 最低 Agent 版本要求
+version = 6.0.0
+
+# 最低 RacksDB 版本要求
+racksdb_version = 0.5.0
+```
+
+---
+
+## Agent 核心模組
 
 ### 檔案結構
 
@@ -88,7 +403,7 @@ slurmweb/slurmrestd/
 
 ---
 
-## 類別階層
+## Agent 類別階層
 
 Slurm-web 使用裝飾者模式 (Decorator Pattern) 來逐層增加功能：
 
@@ -605,19 +920,46 @@ def nodes():
 
 ## API 端點對照
 
-### Agent API → slurmrestd API
+### 完整端點對照表
 
-| Agent 端點 | slurmrestd 端點 | 說明 |
-|------------|-----------------|------|
-| `/v6/jobs` | `/slurm/v0.0.4x/jobs` | 工作列表 |
-| `/v6/job/<id>` | `/slurm/v0.0.4x/job/<id>` | 單一工作 |
-| `/v6/nodes` | `/slurm/v0.0.4x/nodes` | 節點列表 |
-| `/v6/node/<name>` | `/slurm/v0.0.4x/node/<name>` | 單一節點 |
-| `/v6/partitions` | `/slurm/v0.0.4x/partitions` | 分區列表 |
-| `/v6/qos` | `/slurmdb/v0.0.4x/qos` | QoS 列表 |
-| `/v6/reservations` | `/slurm/v0.0.4x/reservations` | 預約列表 |
-| `/v6/accounts` | `/slurmdb/v0.0.4x/accounts` | 帳戶列表 |
-| `/v6/associations` | `/slurmdb/v0.0.4x/associations` | 關聯列表 |
+以下為從 Frontend 到 slurmrestd 的完整請求路徑對照：
+
+| Frontend 請求 | Gateway 端點 | Agent 端點 | slurmrestd 端點 |
+|---------------|--------------|------------|-----------------|
+| `GET /api/agents/{cluster}/jobs` | `/api/agents/<cluster>/jobs` | `/v6/jobs` | `/slurm/v0.0.4x/jobs` |
+| `GET /api/agents/{cluster}/job/123` | `/api/agents/<cluster>/job/<job>` | `/v6/job/<job>` | `/slurm/v0.0.4x/job/<id>` |
+| `GET /api/agents/{cluster}/nodes` | `/api/agents/<cluster>/nodes` | `/v6/nodes` | `/slurm/v0.0.4x/nodes` |
+| `GET /api/agents/{cluster}/node/n01` | `/api/agents/<cluster>/node/<name>` | `/v6/node/<name>` | `/slurm/v0.0.4x/node/<name>` |
+| `GET /api/agents/{cluster}/partitions` | `/api/agents/<cluster>/partitions` | `/v6/partitions` | `/slurm/v0.0.4x/partitions` |
+| `GET /api/agents/{cluster}/qos` | `/api/agents/<cluster>/qos` | `/v6/qos` | `/slurmdb/v0.0.4x/qos` |
+| `GET /api/agents/{cluster}/reservations` | `/api/agents/<cluster>/reservations` | `/v6/reservations` | `/slurm/v0.0.4x/reservations` |
+| `GET /api/agents/{cluster}/accounts` | `/api/agents/<cluster>/accounts` | `/v6/accounts` | `/slurmdb/v0.0.4x/accounts` |
+| `GET /api/agents/{cluster}/associations` | `/api/agents/<cluster>/associations` | `/v6/associations` | `/slurmdb/v0.0.4x/associations` |
+
+### Gateway 專屬端點（不代理）
+
+| 端點 | 方法 | 說明 |
+|------|------|------|
+| `/api/version` | GET | Gateway 版本資訊 |
+| `/api/login` | POST | 使用者登入（LDAP 認證） |
+| `/api/anonymous` | GET | 匿名存取（認證關閉時） |
+| `/api/clusters` | GET | 取得可用叢集列表與權限 |
+| `/api/users` | GET | 取得 LDAP 使用者列表 |
+| `/api/messages/login` | GET | 登入頁面訊息 |
+
+### Agent 專屬端點
+
+| 端點 | 方法 | RBAC Action | 說明 |
+|------|------|-------------|------|
+| `/version` | GET | - | Agent 版本資訊 |
+| `/info` | GET | - | Agent 狀態資訊 |
+| `/v6/permissions` | GET | - | 使用者權限 |
+| `/v6/ping` | GET | - | slurmrestd 連線測試 |
+| `/v6/stats` | GET | view-stats | 統計摘要 |
+| `/v6/cache/stats` | GET | cache-view | 快取統計 |
+| `/v6/cache/reset` | POST | cache-reset | 重設快取 |
+| `/v6/metrics/<metric>` | GET | 動態 | Prometheus 指標查詢 |
+| `/metrics` | GET | - | Prometheus 端點 |
 
 ---
 
