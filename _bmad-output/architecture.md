@@ -4,36 +4,54 @@
 
 Slurm-web 採用**前後端分離的多層架構**，由以下主要組件構成：
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        使用者瀏覽器                              │
-│                     (Vue 3 SPA Frontend)                        │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ HTTPS
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Slurm-web Gateway                          │
-│              (Flask + RFL.authentication + JWT)                 │
-│                                                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
-│  │ UI Assets   │  │ Auth/Login  │  │ Proxy to Agents         │ │
-│  │ Serving     │  │ (LDAP/JWT)  │  │ (async via aiohttp)     │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘ │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ HTTPS (JWT Bearer)
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│  Slurm-web      │ │  Slurm-web      │ │  Slurm-web      │
-│  Agent          │ │  Agent          │ │  Agent          │
-│  (Cluster A)    │ │  (Cluster B)    │ │  (Cluster N)    │
-└────────┬────────┘ └────────┬────────┘ └────────┬────────┘
-         │                   │                   │
-         ▼                   ▼                   ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│   slurmrestd    │ │   slurmrestd    │ │   slurmrestd    │
-│   (Slurm API)   │ │   (Slurm API)   │ │   (Slurm API)   │
-└─────────────────┘ └─────────────────┘ └─────────────────┘
+```mermaid
+flowchart TD
+    subgraph Browser["使用者瀏覽器"]
+        Frontend["Vue 3 SPA<br/>Frontend"]
+    end
+
+    subgraph Gateway["Slurm-web Gateway<br/>(Flask + JWT)"]
+        UI["UI Assets<br/>Serving"]
+        Auth["Authentication<br/>(LDAP/JWT)"]
+        Proxy["Proxy to Agents<br/>(async aiohttp)"]
+    end
+
+    subgraph Cluster1["HPC Cluster A"]
+        Agent1["Slurm-web<br/>Agent"]
+        Redis1["Redis<br/>Cache"]
+        Slurmd1["slurmrestd"]
+    end
+
+    subgraph Cluster2["HPC Cluster B"]
+        Agent2["Slurm-web<br/>Agent"]
+        Redis2["Redis<br/>Cache"]
+        Slurmd2["slurmrestd"]
+    end
+
+    subgraph ClusterN["HPC Cluster N"]
+        AgentN["Slurm-web<br/>Agent"]
+        RedisN["Redis<br/>Cache"]
+        SlurmdN["slurmrestd"]
+    end
+
+    Frontend -->|HTTPS| Gateway
+    Gateway -->|HTTPS<br/>JWT Bearer| Agent1
+    Gateway -->|HTTPS<br/>JWT Bearer| Agent2
+    Gateway -->|HTTPS<br/>JWT Bearer| AgentN
+
+    Agent1 <-->|Cache| Redis1
+    Agent2 <-->|Cache| Redis2
+    AgentN <-->|Cache| RedisN
+
+    Agent1 -->|Unix Socket<br/>或 JWT| Slurmd1
+    Agent2 -->|Unix Socket<br/>或 JWT| Slurmd2
+    AgentN -->|Unix Socket<br/>或 JWT| SlurmdN
+
+    style Frontend fill:#e1f5ff
+    style Gateway fill:#fff4e6
+    style Agent1 fill:#f3e5f5
+    style Agent2 fill:#f3e5f5
+    style AgentN fill:#f3e5f5
 ```
 
 ## 組件詳細說明
@@ -62,20 +80,29 @@ Vue 3 單頁應用程式，使用 Composition API 和 TypeScript 開發。
 
 #### 路由結構
 
-```typescript
-/                       → 重定向到 /clusters
-/login                  → 登入頁面
-/anonymous              → 匿名存取
-/clusters               → 叢集列表
-/settings               → 設定頁面
-/:cluster/dashboard     → 叢集儀表板
-/:cluster/jobs          → 工作列表
-/:cluster/job/:id       → 工作詳情
-/:cluster/resources     → 資源視圖
-/:cluster/node/:name    → 節點詳情
-/:cluster/qos           → QoS 設定
-/:cluster/reservations  → 預約管理
-/:cluster/accounts      → 帳戶管理
+```mermaid
+flowchart TD
+    Root["/"] -->|redirect| Clusters["/clusters<br/>叢集列表"]
+    Root --> Login["/login<br/>登入頁面"]
+    Root --> Anonymous["/anonymous<br/>匿名存取"]
+    Root --> Settings["/settings<br/>設定頁面"]
+
+    Root --> ClusterRoutes["/:cluster"]
+
+    ClusterRoutes --> Dashboard["dashboard<br/>叢集儀表板"]
+    ClusterRoutes --> Jobs["jobs<br/>工作列表"]
+    ClusterRoutes --> JobDetail["job/:id<br/>工作詳情"]
+    ClusterRoutes --> Resources["resources<br/>資源視圖"]
+    ClusterRoutes --> NodeDetail["node/:name<br/>節點詳情"]
+    ClusterRoutes --> Qos["qos<br/>QoS 設定"]
+    ClusterRoutes --> Reservations["reservations<br/>預約管理"]
+    ClusterRoutes --> Accounts["accounts<br/>帳戶管理"]
+
+    style Root fill:#e3f2fd
+    style ClusterRoutes fill:#fff3e0
+    style Dashboard fill:#f3e5f5
+    style Jobs fill:#f3e5f5
+    style Resources fill:#f3e5f5
 ```
 
 ---
@@ -91,7 +118,7 @@ Vue 3 單頁應用程式，使用 Composition API 和 TypeScript 開發。
 
 #### 類別層次
 
-```
+```text
 SlurmwebGenericApp
     │
     └── SlurmwebWebApp (Flask)
@@ -112,12 +139,26 @@ SlurmwebGenericApp
 
 #### 認證流程
 
-```
-1. 使用者提交帳密 → POST /api/login
-2. Gateway 驗證 LDAP
-3. 產生 JWT Token（含 user/groups）
-4. 後續請求攜帶 Bearer Token
-5. Agent 驗證 Token 並檢查 RBAC 權限
+```mermaid
+sequenceDiagram
+    participant U as 使用者
+    participant G as Gateway
+    participant L as LDAP
+    participant A as Agent
+
+    U->>G: POST /api/login<br/>(username, password)
+    G->>L: LDAP Bind
+    L-->>G: 驗證成功
+    G->>L: 查詢 User Groups
+    L-->>G: 返回 Groups
+    G-->>U: JWT Token<br/>(含 user/groups)
+
+    Note over U,A: 後續 API 請求
+    U->>G: API Request<br/>(Bearer Token)
+    G->>A: 轉發請求<br/>(Bearer Token)
+    A->>A: 驗證 Token<br/>檢查 RBAC 權限
+    A-->>G: 資料回應
+    G-->>U: 資料回應
 ```
 
 ---
@@ -134,7 +175,7 @@ SlurmwebGenericApp
 
 #### 類別層次
 
-```
+```text
 SlurmwebGenericApp
     │
     └── SlurmwebWebApp (Flask)
@@ -171,7 +212,7 @@ SlurmwebGenericApp
 
 #### 模組結構
 
-```
+```text
 slurmrestd/
 ├── __init__.py          # SlurmrestdFiltered, SlurmrestdFilteredCached
 ├── auth.py              # SlurmrestdAuthentifier (JWT/local)
@@ -197,48 +238,29 @@ slurmrestd/
 
 ## 資料流程
 
-### 1. 取得工作列表流程
+### 取得工作列表流程
 
-```
-Frontend                Gateway              Agent              slurmrestd
-   │                       │                   │                    │
-   │ GET /api/agents/      │                   │                    │
-   │   cluster/jobs        │                   │                    │
-   │──────────────────────>│                   │                    │
-   │                       │ GET /v6.0.0/jobs  │                    │
-   │                       │ (Bearer Token)    │                    │
-   │                       │──────────────────>│                    │
-   │                       │                   │ Check Redis Cache  │
-   │                       │                   │──────────────┐     │
-   │                       │                   │<─────────────┘     │
-   │                       │                   │                    │
-   │                       │                   │ (if miss) GET jobs │
-   │                       │                   │───────────────────>│
-   │                       │                   │<───────────────────│
-   │                       │                   │ Filter + Cache     │
-   │                       │<──────────────────│                    │
-   │<──────────────────────│                   │                    │
-```
+```mermaid
+sequenceDiagram
+    participant F as Frontend
+    participant G as Gateway
+    participant A as Agent
+    participant R as Redis Cache
+    participant S as slurmrestd
 
-### 2. 認證流程
-
-```
-Frontend                Gateway              LDAP Server
-   │                       │                    │
-   │ POST /api/login       │                    │
-   │ {user, password}      │                    │
-   │──────────────────────>│                    │
-   │                       │ LDAP Bind          │
-   │                       │───────────────────>│
-   │                       │<───────────────────│
-   │                       │                    │
-   │                       │ Get User Groups    │
-   │                       │───────────────────>│
-   │                       │<───────────────────│
-   │                       │                    │
-   │ {token, fullname,     │                    │
-   │  groups}              │                    │
-   │<──────────────────────│                    │
+    F->>G: GET /api/agents/cluster/jobs<br/>(Bearer Token)
+    G->>A: GET /v6.0.0/jobs<br/>(Bearer Token)
+    A->>R: 檢查快取
+    alt 快取命中
+        R-->>A: 返回快取資料
+    else 快取未命中
+        A->>S: GET /slurm/v0.0.44/jobs
+        S-->>A: 原始 Slurm 資料
+        A->>A: 過濾欄位
+        A->>R: 更新快取
+    end
+    A-->>G: 過濾後的工作列表
+    G-->>F: JSON 回應
 ```
 
 ---
@@ -247,7 +269,7 @@ Frontend                Gateway              LDAP Server
 
 ### 配置檔案層次
 
-```
+```text
 /usr/share/slurm-web/conf/  # Vendor 預設配置
 ├── gateway.yml              # Gateway 設定定義
 ├── agent.yml                # Agent 設定定義
@@ -257,6 +279,23 @@ Frontend                Gateway              LDAP Server
 ├── gateway.ini              # Gateway 站點配置
 ├── agent.ini                # Agent 站點配置
 └── policy.ini               # RBAC 角色配置
+```
+
+### 配置初始化流程
+
+```mermaid
+flowchart TD
+    A[CLI 入口點啟動] --> B[載入 SlurmwebAppDefaults]
+    B --> C{應用程式類型?}
+    C -->|Gateway| D[SlurmwebAppDefaults.GATEWAY]
+    C -->|Agent| E[SlurmwebAppDefaults.AGENT]
+    D --> F[取得預設配置路徑]
+    E --> F
+    F --> G[載入 YAML 定義檔<br>/usr/share/slurm-web/conf/*.yml]
+    G --> H[解析 site 配置<br>/etc/slurm-web/*.ini]
+    H --> I[合併並驗證配置]
+    I --> J[建立 RuntimeSettings]
+    J --> K[應用程式初始化完成]
 ```
 
 ### 主要配置區塊

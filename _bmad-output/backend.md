@@ -19,7 +19,7 @@ Slurm-web 後端由兩個主要的 Flask 應用程式組成：**Gateway** 和 **
 
 ## 專案結構
 
-```
+```text
 slurmweb/
 ├── __init__.py
 ├── version.py               # 版本資訊
@@ -29,6 +29,7 @@ slurmweb/
 ├── ui.py                    # UI 資源處理
 ├── apps/                    # Flask 應用程式
 │   ├── __init__.py          # 基礎類別
+│   ├── _defaults.py         # 配置預設值（集中管理）
 │   ├── gateway.py           # Gateway 應用程式
 │   ├── agent.py             # Agent 應用程式
 │   ├── connect.py           # 連線測試工具
@@ -65,7 +66,76 @@ slurmweb/
 
 ## 核心模組
 
+```mermaid
+flowchart TD
+    subgraph Apps["Apps (應用程式)"]
+        Defaults["_defaults.py<br/>配置預設值"]
+        GenericApp["__init__.py<br/>基礎類別"]
+        Gateway["gateway.py<br/>Gateway App"]
+        Agent["agent.py<br/>Agent App"]
+    end
+
+    subgraph Views["Views (視圖函數)"]
+        GatewayViews["gateway.py<br/>Gateway 端點"]
+        AgentViews["agent.py<br/>Agent 端點"]
+    end
+
+    subgraph Slurmrestd["Slurmrestd Client"]
+        RestClient["__init__.py<br/>主客戶端"]
+        RestAuth["auth.py<br/>認證處理"]
+        RestAdapters["adapters/<br/>版本適配器"]
+    end
+
+    subgraph Support["支援模組"]
+        Cache["cache.py<br/>Redis 快取"]
+        Metrics["metrics/<br/>Prometheus 指標"]
+        Errors["errors.py<br/>錯誤類別"]
+    end
+
+    Defaults --> Gateway
+    Defaults --> Agent
+    GenericApp --> Gateway
+    GenericApp --> Agent
+
+    Gateway --> GatewayViews
+    Agent --> AgentViews
+
+    AgentViews --> RestClient
+    RestClient --> RestAuth
+    RestClient --> RestAdapters
+
+    Agent --> Cache
+    Agent --> Metrics
+
+    style Defaults fill:#e1f5ff
+    style Gateway fill:#fff4e6
+    style Agent fill:#f3e5f5
+```
+
 ### 1. Apps（應用程式）
+
+#### 配置預設值 (`/apps/_defaults.py`)
+
+集中式配置管理模組，所有應用程式的預設配置路徑統一在此定義。
+
+```python
+class SlurmwebAppDefaultsSettings:
+    """配置預設值容器"""
+    def __init__(self, site_configuration: str, settings_definition: str):
+        self.site_configuration = site_configuration  # INI 配置檔路徑
+        self.settings_definition = settings_definition  # YAML 定義檔路徑
+
+class SlurmwebAppDefaults:
+    """應用程式配置預設值"""
+    GATEWAY = SlurmwebAppDefaultsSettings(
+        site_configuration="/etc/slurm-web/gateway.ini",
+        settings_definition="/usr/share/slurm-web/conf/gateway.yml",
+    )
+    AGENT = SlurmwebAppDefaultsSettings(
+        site_configuration="/etc/slurm-web/agent.ini",
+        settings_definition="/usr/share/slurm-web/conf/agent.yml",
+    )
+```
 
 #### 基礎類別 (`/apps/__init__.py`)
 
@@ -78,8 +148,6 @@ class SlurmwebAppSeed:
 class SlurmwebGenericApp:
     """基礎應用程式類別"""
     NAME = None
-    SITE_CONFIGURATION = None
-    SETTINGS_DEFINITION = None
 
     def __init__(self, seed: SlurmwebAppSeed): ...
     def run(self): ...
@@ -107,8 +175,6 @@ class SlurmwebAppGateway(SlurmwebWebApp, RFLTokenizedWebApp):
     - 代理請求到各叢集 Agent
     """
     NAME = "slurm-web gateway"
-    SITE_CONFIGURATION = "/etc/slurm-web/gateway.ini"
-    SETTINGS_DEFINITION = "/usr/share/slurm-web/conf/gateway.yml"
 
     VIEWS = {
         SlurmwebAppRoute("/api/version", views.version),
@@ -142,8 +208,6 @@ class SlurmwebAppAgent(SlurmwebWebApp, RFLTokenizedRBACWebApp):
     - RacksDB 整合
     """
     NAME = "slurm-web agent"
-    SITE_CONFIGURATION = "/etc/slurm-web/agent.ini"
-    SETTINGS_DEFINITION = "/usr/share/slurm-web/conf/agent.yml"
 
     VIEWS = {
         SlurmwebAppRoute("/info", views.info),
@@ -338,6 +402,28 @@ class SlurmwebMetricsDB:
 | `slurm-web-ldap` | 測試 LDAP 認證 |
 | `slurm-web-showconf` | 顯示配置 |
 
+#### CLI 配置載入機制
+
+CLI 入口點使用 `SlurmwebAppDefaults` 載入配置預設值：
+
+```python
+# slurmweb/exec/gateway.py
+from ..apps._defaults import SlurmwebAppDefaults
+
+parser.add_argument(
+    "--conf-defs",
+    help="Path to configuration settings definition file (default: %(default)s)",
+    default=SlurmwebAppDefaults.GATEWAY.settings_definition,
+    type=Path,
+)
+parser.add_argument(
+    "--conf",
+    help="Path to configuration file (default: %(default)s)",
+    default=SlurmwebAppDefaults.GATEWAY.site_configuration,
+    type=Path,
+)
+```
+
 ---
 
 ## 配置系統
@@ -362,10 +448,16 @@ service:
 
 ### 配置載入流程
 
-1. 載入 vendor 預設配置（YAML 定義）
-2. 覆蓋 site 配置（INI 格式）
-3. 驗證必要欄位
-4. 解析密碼檔案路徑
+```mermaid
+flowchart TD
+    A[CLI 啟動] --> B[讀取 SlurmwebAppDefaults]
+    B --> C[取得預設配置路徑]
+    C --> D[載入 YAML 定義檔]
+    D --> E[覆蓋 INI site 配置]
+    E --> F[驗證必要欄位]
+    F --> G[解析密碼檔案路徑]
+    G --> H[應用程式初始化完成]
+```
 
 ---
 

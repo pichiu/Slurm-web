@@ -145,6 +145,44 @@ npm run test:coverage
 npm run test:watch
 ```
 
+#### 測試最佳實踐
+
+**Mock 層級選擇**:
+
+```typescript
+// ✅ 正確：Mock composables（UI 層依賴）
+vi.mock('@/composables/GatewayAPI', () => ({
+  useGatewayAPI: () => mockAPI
+}))
+
+// ❌ 錯誤：Mock 底層工具（過度耦合）
+vi.mock('undici', () => ({ RESTAPI: mockREST }))
+```
+
+**組件掛載順序**:
+
+```typescript
+// ✅ 正確：先掛載再操作 store
+const wrapper = mount(Component)
+await nextTick()
+store.someState = value
+
+// ❌ 錯誤：在掛載前操作可能引發警告
+store.someState = value
+const wrapper = mount(Component)
+```
+
+**Canvas API 測試**:
+
+使用 `tests/lib/vitest-canvas.ts` 工具處理 Node.js 環境的 Canvas mocking。
+
+**Async 操作**:
+
+```typescript
+await wrapper.setProps({ loading: false })
+await flushPromises()  // 確保非同步完成
+```
+
 ---
 
 ## 程式碼品質

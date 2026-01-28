@@ -23,7 +23,7 @@ Slurm-web 前端是一個基於 Vue 3 的單頁應用程式（SPA），使用 Co
 
 ## 專案結構
 
-```
+```text
 frontend/
 ├── src/
 │   ├── main.ts              # 應用程式入口
@@ -192,33 +192,31 @@ function useGatewayAPI() {
 
 #### 路由結構
 
-```typescript
-const routes = [
-  { path: '/', redirect: { name: 'clusters' } },
-  { path: '/login', name: 'login', component: LoginView },
-  { path: '/anonymous', name: 'anonymous', component: AnonymousView },
-  { path: '/clusters', name: 'clusters', component: ClustersView },
-  { path: '/signout', name: 'signout', component: SignoutView },
-  { path: '/settings', component: SettingsLayout, children: [...] },
-  { path: '/:cluster', children: [
-    { path: 'dashboard', name: 'dashboard', component: DashboardView },
-    { path: 'jobs', name: 'jobs', component: JobsView },
-    { path: 'job/:id', name: 'job', component: JobView },
-    { path: 'resources', name: 'resources', component: ResourcesView },
-    { path: 'node/:nodeName', name: 'node', component: NodeView },
-    { path: 'qos', name: 'qos', component: QosView },
-    { path: 'reservations', name: 'reservations', component: ReservationsView },
-    { path: 'accounts', name: 'accounts', component: AccountsView },
-    { path: 'accounts/:account', name: 'account', component: AccountView },
-    { path: 'users/:user', name: 'user', component: UserView },
-  ]},
-  { path: '/:pathMatch(.*)*', name: 'not-found', component: NotFoundView },
-]
+```mermaid
+flowchart TD
+    Root["/"] -->|redirect| Clusters["/clusters<br/>(ClustersView)"]
+    Root --> Login["/login<br/>(LoginView)"]
+    Root --> Anonymous["/anonymous<br/>(AnonymousView)"]
+    Root --> Signout["/signout<br/>(SignoutView)"]
+    Root --> Settings["/settings<br/>(SettingsLayout)"]
+
+    Root --> ClusterBase["/:cluster"]
+    ClusterBase --> Dashboard["dashboard<br/>(DashboardView)"]
+    ClusterBase --> Jobs["jobs<br/>(JobsView)"]
+    ClusterBase --> Job["job/:id<br/>(JobView)"]
+    ClusterBase --> Resources["resources<br/>(ResourcesView)"]
+    ClusterBase --> Node["node/:nodeName<br/>(NodeView)"]
+    ClusterBase --> Qos["qos<br/>(QosView)"]
+    ClusterBase --> Reservations["reservations<br/>(ReservationsView)"]
+    ClusterBase --> Accounts["accounts<br/>(AccountsView)"]
+    ClusterBase --> Account["accounts/:account<br/>(AccountView)"]
+    ClusterBase --> User["users/:user<br/>(UserView)"]
+
+    style Root fill:#e3f2fd
+    style ClusterBase fill:#fff3e0
 ```
 
-#### Navigation Guard
-
-路由守衛處理認證邏輯：
+**Navigation Guard**:
 - 未登入時重定向到 `/login`
 - 認證關閉時重定向到 `/anonymous`
 - 追蹤當前叢集
@@ -388,6 +386,61 @@ npm run preview  # 預覽建置結果
 ```bash
 npm run test:unit        # 執行單元測試
 npm run test:coverage    # 測試覆蓋率報告
+```
+
+#### 測試策略
+
+**測試隔離原則**：
+
+- **UI 層測試**: 專注於組件行為，避免測試底層實作細節
+- **Mock 策略**: Mock 最小必要範圍，優先 mock composables 而非底層工具
+- **時序處理**: 確保組件掛載順序正確，避免 timing issues
+
+**Mock 層級選擇**：
+
+```typescript
+// ✅ 正確：Mock composables（UI 層依賴）
+vi.mock('@/composables/GatewayAPI', () => ({
+  useGatewayAPI: () => mockGatewayAPI
+}))
+
+// ❌ 錯誤：Mock 底層工具（過度耦合）
+vi.mock('undici', () => ({ RESTAPI: mockREST }))
+```
+
+**測試關注點分離**：
+- **UI 組件測試** → Mock API composables，專注互動邏輯
+- **Composable 測試** → 測試 API 解析與錯誤處理
+
+#### 測試工具
+
+**Canvas Mocking** (`tests/lib/vitest-canvas.ts`):
+
+提供 Canvas API 在 Node.js 環境的 mock 支援。
+
+```typescript
+// vitest-canvas.ts 提供
+- CanvasRenderingContext2D mock
+- Node.js Blob/File 相容性修正
+- 解決 multipart parsing 與 jsdom 的相容性問題
+```
+
+**最佳實踐**:
+
+```typescript
+// 1. 組件掛載順序
+// ✅ 正確：先掛載組件再操作 store
+const wrapper = mount(LoginView)
+await nextTick()
+authStore.returnUrl = '/target'
+
+// ❌ 錯誤：在掛載前操作 store 可能引發警告
+authStore.returnUrl = '/target'
+const wrapper = mount(LoginView)
+
+// 2. Async 操作處理
+await wrapper.setProps({ loading: false })
+await flushPromises()  // 確保非同步操作完成
 ```
 
 ### Linting
