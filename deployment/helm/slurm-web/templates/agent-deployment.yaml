@@ -1,3 +1,4 @@
+{{- if .Values.agent.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,6 +38,8 @@ spec:
       - name: agent
         image: "{{ .Values.agent.image }}"
         imagePullPolicy: {{ .Values.agent.pullPolicy }}
+        command: ["slurm-web"]
+        args: ["agent", "--conf-defs", "/usr/share/slurm-web/conf/vendor/agent.yml", "--conf", "/etc/slurm-web/agent.ini"]
         ports:
         - name: http
           containerPort: 5012
@@ -56,6 +59,11 @@ spec:
         - name: jwt-key
           mountPath: /var/lib/slurm-web
           readOnly: true
+        {{- if .Values.agent.slurmrestd.jwtSecret }}
+        - name: slurmrestd-jwt
+          mountPath: /var/lib/slurm-web/slurmrestd
+          readOnly: true
+        {{- end }}
         startupProbe:
           httpGet:
             path: /info
@@ -90,3 +98,13 @@ spec:
         secret:
           secretName: {{ include "slurm-web.fullname" . }}-jwt
           defaultMode: 0400
+      {{- if .Values.agent.slurmrestd.jwtSecret }}
+      - name: slurmrestd-jwt
+        secret:
+          secretName: {{ .Values.agent.slurmrestd.jwtSecret.name }}
+          items:
+          - key: {{ .Values.agent.slurmrestd.jwtSecret.key }}
+            path: jwt.key
+          defaultMode: 0400
+      {{- end }}
+{{- end }}

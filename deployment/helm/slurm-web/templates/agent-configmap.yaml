@@ -1,3 +1,4 @@
+{{- if .Values.agent.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -22,7 +23,11 @@ data:
     jwt_mode = auto
     jwt_user = slurm
     jwt_lifespan = 3600
+    {{- if .Values.agent.slurmrestd.jwtSecret }}
+    jwt_key = /var/lib/slurm-web/slurmrestd/jwt.key
+    {{- else }}
     jwt_key = /var/lib/slurm-web/jwt.key
+    {{- end }}
 
     [jwt]
     key = /var/lib/slurm-web/jwt.key
@@ -32,15 +37,20 @@ data:
     {{- if .Values.redis.enabled }}
     [cache]
     enabled = true
-    host = {{ include "slurm-web.fullname" . }}-redis
+    host = {{ .Values.redis.host | default (printf "%s-redis" (include "slurm-web.fullname" .)) }}
     port = {{ .Values.redis.service.port }}
     {{- else }}
     [cache]
     enabled = false
     {{- end }}
 
+    [policy]
+    definition = /usr/share/slurm-web/conf/vendor/policy.yml
+    vendor_roles = /usr/share/slurm-web/conf/vendor/policy.ini
+
     [racksdb]
     enabled = false
 
     [metrics]
     enabled = false
+{{- end }}

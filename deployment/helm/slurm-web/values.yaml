@@ -1,35 +1,49 @@
-# Default values for slurm-web MVP deployment
+# Default values for slurm-web deployment
 # This is a YAML-formatted file.
+#
+# For split deployment, use:
+#   values-gateway.yaml - Gateway + Redis + Ingress (target: pi namespace)
+#   values-agent.yaml   - Agent only (target: slurm namespace)
 
 # Gateway configuration
 gateway:
-  # Container image settings
-  image: "my-registry/slurm-web:gateway-mvp"
-  pullPolicy: IfNotPresent
-
-  # Replica count (MVP: single instance)
+  enabled: true
+  image: "ociscloud/slurm-web:gateway-latest"
+  pullPolicy: Always
   replicaCount: 1
 
-  # Service configuration
   service:
     type: ClusterIP
     port: 5011
 
+  # Agent URL (override for cross-namespace deployment)
+  agentUrl: "http://slurm-web-agent:5012"
+
   # Ingress configuration
   ingress:
     enabled: true
-    className: nginx  # Adjust based on your cluster's ingress controller
-    host: "slurm-web.local"
-    annotations: {}
+    className: kong
+    host: "slurm-web-61-222-206-87.sslip.io"
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
     tls:
-      enabled: false
-      secretName: ""
+      enabled: true
+      secretName: "slurm-web-tls"
 
-  # Authentication method
+  # Authentication method: "ldap", "jwt", or "none"
   auth:
-    method: "ldap"  # Options: "ldap", "jwt", "none"
+    method: "ldap"
 
-  # Resource limits (MVP: minimal)
+  # LDAP configuration (used when auth.method = "ldap")
+  ldap:
+    uri: "ldap://openldap.openldap.svc.cluster.local:389"
+    userBase: "ou=users,ou=ocis,dc=asus,dc=com"
+    groupBase: "ou=groups,ou=ocis,dc=asus,dc=com"
+    bindDn: "cn=admin,dc=asus,dc=com"
+    bindPasswordSecret:
+      name: "auth-proxy"
+      key: "LDAP_BIND_PASSWORD"
+
   resources:
     requests:
       memory: "256Mi"
@@ -40,26 +54,23 @@ gateway:
 
 # Agent configuration
 agent:
-  # Container image settings
-  image: "my-registry/slurm-web:agent-mvp"
-  pullPolicy: IfNotPresent
-
-  # Replica count (MVP: single instance)
+  enabled: true
+  image: "ociscloud/slurm-web:agent-latest"
+  pullPolicy: Always
   replicaCount: 1
 
-  # Service configuration
   service:
     type: ClusterIP
     port: 5012
 
-  # Slurm restapi connection
   slurmrestd:
-    # IMPORTANT: Replace with your Slurm restapi service URL
-    # Example: http://slurm-restapi.slurm-namespace.svc.cluster.local:6820
-    uri: "http://slurm-restapi.default.svc.cluster.local:6820"
-    version: "v0.0.40"  # Slurm REST API version
+    uri: "http://slurm-restapi.slurm.svc.cluster.local:6820"
+    version: "v0.0.40"
+    # Existing K8s secret for slurmrestd JWT auth (set to null to use shared key)
+    jwtSecret:
+      name: "slurm-auth-jwths256"
+      key: "jwt_hs256.key"
 
-  # Resource limits (MVP: minimal)
   resources:
     requests:
       memory: "256Mi"
@@ -68,9 +79,11 @@ agent:
       memory: "512Mi"
       cpu: "500m"
 
-# Redis configuration (MVP: single instance, no persistence)
+# Redis configuration
 redis:
   enabled: true
+  external: false  # Set true to skip deploying Redis (use existing instance)
+  # host: ""       # Override Redis hostname (for external/cross-namespace Redis)
   image: "redis:alpine"
   pullPolicy: IfNotPresent
 
@@ -78,7 +91,6 @@ redis:
     type: ClusterIP
     port: 6379
 
-  # MVP: No persistence for simplicity
   persistence:
     enabled: false
 
@@ -92,13 +104,13 @@ redis:
 
 # Secrets configuration
 secrets:
-  # JWT secret key (must be at least 32 characters)
-  # Generate with: openssl rand -base64 32
-  jwtKey: "CHANGE-ME-at-least-32-character-secret-key-here"
+  # JWT secret key for slurm-web internal auth (gateway <-> agent)
+  # Must be at least 32 characters. Generate with: openssl rand -base64 32
+  jwtKey: "NYH4zNkBGbFPe4yt+rShKqgUmi4Ep6ig9r+VqZy/JvI="
 
-# Image pull secrets (if using private registry)
-imagePullSecrets: []
-# - name: my-registry-secret
+# Image pull secrets (for private registry)
+imagePullSecrets:
+  - name: regcred-ocis
 
 # Common labels
 commonLabels:

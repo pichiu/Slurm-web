@@ -1,3 +1,4 @@
+{{- if .Values.gateway.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,6 +38,8 @@ spec:
       - name: gateway
         image: "{{ .Values.gateway.image }}"
         imagePullPolicy: {{ .Values.gateway.pullPolicy }}
+        command: ["slurm-web"]
+        args: ["gateway", "--conf-defs", "/usr/share/slurm-web/conf/vendor/gateway.yml", "--conf", "/etc/slurm-web/gateway.ini"]
         ports:
         - name: http
           containerPort: 5011
@@ -56,6 +59,12 @@ spec:
         - name: jwt-key
           mountPath: /var/lib/slurm-web
           readOnly: true
+        {{- if and (eq .Values.gateway.auth.method "ldap") .Values.gateway.ldap.bindDn }}
+        - name: ldap-bind-password
+          mountPath: /etc/slurm-web-secrets/ldap-bind-password
+          subPath: {{ .Values.gateway.ldap.bindPasswordSecret.key }}
+          readOnly: true
+        {{- end }}
         startupProbe:
           httpGet:
             path: /health
@@ -90,3 +99,10 @@ spec:
         secret:
           secretName: {{ include "slurm-web.fullname" . }}-jwt
           defaultMode: 0400
+      {{- if and (eq .Values.gateway.auth.method "ldap") .Values.gateway.ldap.bindDn }}
+      - name: ldap-bind-password
+        secret:
+          secretName: {{ .Values.gateway.ldap.bindPasswordSecret.name }}
+          defaultMode: 0400
+      {{- end }}
+{{- end }}

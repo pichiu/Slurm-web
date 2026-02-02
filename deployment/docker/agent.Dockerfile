@@ -64,5 +64,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -f http://localhost:5012/info || exit 1
 
 # Set entrypoint
-ENTRYPOINT ["slurm-web-agent"]
-CMD ["--conf", "/etc/slurm-web/agent.ini"]
+ENTRYPOINT ["slurm-web"]
+CMD ["agent", "--conf", "/etc/slurm-web/agent.ini"]

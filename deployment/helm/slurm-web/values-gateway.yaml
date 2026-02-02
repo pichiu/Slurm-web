@@ -1,0 +1,87 @@
+# Slurm-web Gateway deployment values
+# Components: Gateway + Redis + Ingress (Agent is deployed separately)
+#
+# Deploy:
+#   helm upgrade --install slurm-web-gateway ./slurm-web \
+#     -f values-gateway.yaml --namespace pi
+#
+# Target namespace: pi
+
+fullnameOverride: "slurm-web"
+
+gateway:
+  enabled: true
+  image: "ociscloud/slurm-web:gateway-latest"
+  pullPolicy: Always
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 5011
+
+  # Agent URL - cross-namespace reference to agent in slurm namespace
+  agentUrl: "http://slurm-web-agent.slurm.svc.cluster.local:5012"
+
+  ingress:
+    enabled: true
+    className: kong
+    host: "slurm-web-61-222-206-87.sslip.io"
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls:
+      enabled: true
+      secretName: "slurm-web-tls"
+
+  auth:
+    method: "ldap"
+
+  ldap:
+    uri: "ldap://openldap.openldap.svc.cluster.local:389"
+    userBase: "ou=users,ou=ocis,dc=asus,dc=com"
+    groupBase: "ou=groups,ou=ocis,dc=asus,dc=com"
+    bindDn: "cn=admin,dc=asus,dc=com"
+    bindPasswordSecret:
+      name: "auth-proxy"
+      key: "LDAP_BIND_PASSWORD"
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# Agent disabled in pi namespace (deployed in slurm namespace instead)
+agent:
+  enabled: false
+  service:
+    port: 5012
+
+# Redis cache for gateway
+redis:
+  enabled: true
+  image: "redis:alpine"
+  pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 6379
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+secrets:
+  jwtKey: "NYH4zNkBGbFPe4yt+rShKqgUmi4Ep6ig9r+VqZy/JvI="
+
+imagePullSecrets:
+  - name: regcred-ocis
+
+commonLabels:
+  app.kubernetes.io/part-of: slurm-web
+  app.kubernetes.io/managed-by: helm

@@ -1,0 +1,78 @@
+# Slurm-web Agent deployment values
+# Components: Agent only (Gateway/Redis/Ingress deployed separately)
+#
+# Deploy:
+#   helm upgrade --install slurm-web-agent ./slurm-web \
+#     -f values-agent.yaml --namespace slurm
+#
+# Target namespace: slurm
+
+fullnameOverride: "slurm-web"
+
+# Gateway disabled (deployed via values-gateway.yaml in pi namespace)
+gateway:
+  enabled: false
+  auth:
+    method: "none"
+  ingress:
+    enabled: false
+    tls:
+      enabled: false
+
+agent:
+  enabled: true
+  image: "ociscloud/slurm-web:agent-latest"
+  pullPolicy: Always
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 5012
+
+  slurmrestd:
+    # Same namespace - direct service reference
+    uri: "http://slurm-restapi:6820"
+    version: "v0.0.40"
+    # Directly reference the Slurm JWT secret (same namespace)
+    jwtSecret:
+      name: "slurm-auth-jwths256"
+      key: "jwt_hs256.key"
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# Redis is in pi namespace, accessed cross-namespace (don't deploy locally)
+redis:
+  enabled: true
+  external: true
+  host: "slurm-web-redis.pi.svc.cluster.local"
+  image: "redis:alpine"
+  pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 6379
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+# Same JWT key as gateway for internal auth
+secrets:
+  jwtKey: "NYH4zNkBGbFPe4yt+rShKqgUmi4Ep6ig9r+VqZy/JvI="
+
+imagePullSecrets:
+  - name: regcred-ocis
+
+commonLabels:
+  app.kubernetes.io/part-of: slurm-web
+  app.kubernetes.io/managed-by: helm
