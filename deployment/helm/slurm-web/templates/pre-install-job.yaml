@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "slurm-web.fullname" . }}-pre-install
+  labels:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "slurm-web.fullname" . }}-pre-install-script
+  labels:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  validate.sh: |
+    #!/bin/sh
+    set -e
+
+    echo "=== Slurm-web Pre-Installation Validation ==="
+
+    # Validate JWT Secret
+    JWT_KEY="{{ .Values.secrets.jwtKey }}"
+
+    if [ -z "$JWT_KEY" ]; then
+      echo "ERROR: JWT secret key is not configured"
+      exit 1
+    fi
+
+    # Check for insecure default values
+    if echo "$JWT_KEY" | grep -iq "CHANGE-ME"; then
+      echo "ERROR: Insecure default JWT secret detected!"
+      echo ""
+      echo "You must configure a secure JWT secret before deployment."
+      echo "Generate one with: openssl rand -base64 32"
+      echo ""
+      echo "Set it in values.yaml:"
+      echo "  secrets:"
+      echo "    jwtKey: \"your-secure-32-character-key\""
+      exit 1
+    fi
+
+    # Validate JWT key length (at least 32 characters)
+    JWT_LEN=$(echo -n "$JWT_KEY" | wc -c)
+    if [ "$JWT_LEN" -lt 32 ]; then
+      echo "ERROR: JWT secret key is too short (${JWT_LEN} characters)"
+      echo "Minimum required: 32 characters"
+      echo "Generate a secure key with: openssl rand -base64 32"
+      exit 1
+    fi
+
+    echo "✓ JWT secret validation passed"
+
+    # Validate Slurm REST API configuration
+    SLURM_URI="{{ .Values.agent.slurmrestd.uri }}"
+    if echo "$SLURM_URI" | grep -q "default.svc.cluster.local"; then
+      echo "WARNING: Slurm REST API URI appears to use default value"
+      echo "Current value: $SLURM_URI"
+      echo "Please ensure this is correct for your environment"
+    fi
+
+    echo "✓ Configuration validation passed"
+    echo "=== Pre-Installation validation completed successfully ==="
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "slurm-web.fullname" . }}-pre-install
+  labels:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 0
+  template:
+    metadata:
+      name: {{ include "slurm-web.fullname" . }}-pre-install
+    spec:
+      serviceAccountName: {{ include "slurm-web.fullname" . }}-pre-install
+      restartPolicy: Never
+      containers:
+      - name: validate
+        image: alpine:3.19
+        command: ["/bin/sh", "/scripts/validate.sh"]
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: scripts
+        configMap:
+          name: {{ include "slurm-web.fullname" . }}-pre-install-script
+          defaultMode: 0555

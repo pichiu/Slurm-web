@@ -1,0 +1,23 @@
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "slurm-web.fullname" . }}-redis
+  labels:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}-redis
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: cache
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.redis.service.type }}
+  ports:
+  - port: {{ .Values.redis.service.port }}
+    targetPort: redis
+    protocol: TCP
+    name: redis
+  selector:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}-redis
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

@@ -1,0 +1,35 @@
+{{- if .Values.gateway.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "slurm-web.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.gateway.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.gateway.ingress.className }}
+  {{- if .Values.gateway.ingress.tls.enabled }}
+  tls:
+  - hosts:
+    - {{ .Values.gateway.ingress.host }}
+    secretName: {{ .Values.gateway.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+  - host: {{ .Values.gateway.ingress.host }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "slurm-web.fullname" . }}-gateway
+            port:
+              number: {{ .Values.gateway.service.port }}
+{{- end }}

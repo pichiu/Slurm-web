@@ -1,0 +1,106 @@
+# Default values for slurm-web MVP deployment
+# This is a YAML-formatted file.
+
+# Gateway configuration
+gateway:
+  # Container image settings
+  image: "my-registry/slurm-web-gateway:mvp"
+  pullPolicy: IfNotPresent
+
+  # Replica count (MVP: single instance)
+  replicaCount: 1
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 5011
+
+  # Ingress configuration
+  ingress:
+    enabled: true
+    className: nginx  # Adjust based on your cluster's ingress controller
+    host: "slurm-web.local"
+    annotations: {}
+    tls:
+      enabled: false
+      secretName: ""
+
+  # Authentication method
+  auth:
+    method: "ldap"  # Options: "ldap", "jwt", "none"
+
+  # Resource limits (MVP: minimal)
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# Agent configuration
+agent:
+  # Container image settings
+  image: "my-registry/slurm-web-agent:mvp"
+  pullPolicy: IfNotPresent
+
+  # Replica count (MVP: single instance)
+  replicaCount: 1
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 5012
+
+  # Slurm restapi connection
+  slurmrestd:
+    # IMPORTANT: Replace with your Slurm restapi service URL
+    # Example: http://slurm-restapi.slurm-namespace.svc.cluster.local:6820
+    uri: "http://slurm-restapi.default.svc.cluster.local:6820"
+    version: "v0.0.40"  # Slurm REST API version
+
+  # Resource limits (MVP: minimal)
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# Redis configuration (MVP: single instance, no persistence)
+redis:
+  enabled: true
+  image: "redis:alpine"
+  pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 6379
+
+  # MVP: No persistence for simplicity
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+# Secrets configuration
+secrets:
+  # JWT secret key (must be at least 32 characters)
+  # Generate with: openssl rand -base64 32
+  jwtKey: "CHANGE-ME-at-least-32-character-secret-key-here"
+
+# Image pull secrets (if using private registry)
+imagePullSecrets: []
+# - name: my-registry-secret
+
+# Common labels
+commonLabels:
+  app.kubernetes.io/part-of: slurm-web
+  app.kubernetes.io/managed-by: helm

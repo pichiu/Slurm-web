@@ -1,0 +1,87 @@
+# Example values.yaml for quick deployment testing
+# Copy this file and customize for your environment
+
+gateway:
+  image: "my-registry.example.com/slurm-web-gateway:mvp"
+  pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 5011
+
+  ingress:
+    enabled: true
+    className: nginx
+    host: "slurm-web.example.com"  # CHANGE THIS
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"  # Optional: for auto TLS
+    tls:
+      enabled: false
+      secretName: ""
+
+  auth:
+    method: "ldap"  # Options: "ldap", "jwt", "none"
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+agent:
+  image: "my-registry.example.com/slurm-web-agent:mvp"
+  pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 5012
+
+  slurmrestd:
+    # IMPORTANT: Update this to your actual Slurm REST API service
+    uri: "http://slurm-restapi.slurm-system.svc.cluster.local:6820"
+    version: "v0.0.40"
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+redis:
+  enabled: true
+  image: "redis:alpine"
+  pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 6379
+
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+secrets:
+  # CRITICAL: Generate a secure key with: openssl rand -base64 32
+  jwtKey: "REPLACE-WITH-YOUR-SECURE-KEY-AT-LEAST-32-CHARS"
+
+imagePullSecrets: []
+# Uncomment if using private registry:
+# - name: my-registry-secret
+
+commonLabels:
+  app.kubernetes.io/part-of: slurm-web
+  app.kubernetes.io/managed-by: helm
+  environment: "production"  # or "staging", "development"

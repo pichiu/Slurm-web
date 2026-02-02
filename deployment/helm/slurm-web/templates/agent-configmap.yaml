@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "slurm-web.fullname" . }}-agent
+  labels:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}-agent
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  agent.ini: |
+    [service]
+    cluster = default
+    interface = 0.0.0.0
+    port = 5012
+    debug = false
+
+    [slurmrestd]
+    uri = {{ .Values.agent.slurmrestd.uri }}
+    auth = jwt
+    jwt_mode = auto
+    jwt_user = slurm
+    jwt_lifespan = 3600
+    jwt_key = /var/lib/slurm-web/jwt.key
+
+    [jwt]
+    key = /var/lib/slurm-web/jwt.key
+    algorithm = HS256
+    audience = slurm-web
+
+    {{- if .Values.redis.enabled }}
+    [cache]
+    enabled = true
+    host = {{ include "slurm-web.fullname" . }}-redis
+    port = {{ .Values.redis.service.port }}
+    {{- else }}
+    [cache]
+    enabled = false
+    {{- end }}
+
+    [racksdb]
+    enabled = false
+
+    [metrics]
+    enabled = false

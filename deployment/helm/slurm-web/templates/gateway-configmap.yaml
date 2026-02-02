@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "slurm-web.fullname" . }}-gateway
+  labels:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  gateway.ini: |
+    [service]
+    interface = 0.0.0.0
+    port = 5011
+    debug = false
+
+    [ui]
+    host = {{ if .Values.gateway.ingress.enabled }}https://{{ .Values.gateway.ingress.host }}{{ else }}http://localhost:5011{{ end }}
+    enabled = true
+    path = /usr/share/slurm-web/frontend
+
+    [agents]
+    url = http://{{ include "slurm-web.fullname" . }}-agent:{{ .Values.agent.service.port }}
+
+    [authentication]
+    enabled = {{ if eq .Values.gateway.auth.method "none" }}false{{ else }}true{{ end }}
+    {{- if ne .Values.gateway.auth.method "none" }}
+    method = {{ .Values.gateway.auth.method }}
+    {{- end }}
+
+    {{- if eq .Values.gateway.auth.method "ldap" }}
+    [ldap]
+    # LDAP configuration - Update these values according to your LDAP setup
+    # uri = ldap://ldap.example.com
+    # user_base = ou=people,dc=example,dc=org
+    # group_base = ou=groups,dc=example,dc=org
+    {{- end }}
+
+    [jwt]
+    key = /var/lib/slurm-web/jwt.key
+    duration = 1
+    algorithm = HS256
+    audience = slurm-web

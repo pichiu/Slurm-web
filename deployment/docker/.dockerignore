@@ -1,0 +1,89 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+# IMPORTANT: Keep README.md as it's required by pyproject.toml
+docs/
+LICENSE
+CHANGELOG.md
+CONTRIBUTING.md
+*.md
+!README.md
+
+# CI/CD
+.github/
+.pre-commit-config.yaml
+
+# Development
+dev/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+tests/
+*.test
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+ENV/
+env/
+
+# Node artifacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.eslintcache
+
+# Deployment artifacts
+# IMPORTANT: Keep conf/ directory - required by Dockerfile COPY command
+deployment/helm/
+deployment/README.md
+deployment/Makefile
+deployment/DEPLOYMENT_IMPROVEMENTS.md
+*.Dockerfile
+.dockerignore
+
+# BMAD
+_bmad/
+_bmad-output/
+.claude/
+.gemini/
+
+# Assets (not needed in runtime)
+assets/
+
+# Temporary files
+*.tmp
+*.bak
+*.log

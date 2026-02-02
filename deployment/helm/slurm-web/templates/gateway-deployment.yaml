@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "slurm-web.fullname" . }}-gateway
+  labels:
+    app.kubernetes.io/name: {{ include "slurm-web.name" . }}-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: gateway
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  replicas: {{ .Values.gateway.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "slurm-web.name" . }}-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "slurm-web.name" . }}-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: gateway
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: gateway
+        image: "{{ .Values.gateway.image }}"
+        imagePullPolicy: {{ .Values.gateway.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 5011
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: config
+          mountPath: /etc/slurm-web
+          readOnly: true
+        - name: jwt-key
+          mountPath: /var/lib/slurm-web
+          readOnly: true
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.gateway.resources | nindent 10 }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ include "slurm-web.fullname" . }}-gateway
+      - name: jwt-key
+        secret:
+          secretName: {{ include "slurm-web.fullname" . }}-jwt
+          defaultMode: 0400

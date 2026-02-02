@@ -1,0 +1,16 @@
+apiVersion: v2
+name: slurm-web
+description: Helm chart for Slurm-web Gateway and Agent (MVP deployment)
+type: application
+version: 1.0.0
+appVersion: "6.0.0"
+keywords:
+  - slurm
+  - hpc
+  - cluster
+  - web-interface
+home: https://github.com/rackslab/slurm-web
+sources:
+  - https://github.com/rackslab/slurm-web
+maintainers:
+  - name: Slurm-web Team
