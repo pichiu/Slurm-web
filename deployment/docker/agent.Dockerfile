@@ -6,7 +6,9 @@ WORKDIR /build
 # Install build dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        gcc && \
+        gcc \
+        pkg-config \
+        libcairo2-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy Python project files
@@ -22,6 +24,7 @@ FROM python:3.11-slim-bookworm
 # Install runtime dependencies only
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        libcairo2 \
         ca-certificates \
         curl && \
     rm -rf /var/lib/apt/lists/*
