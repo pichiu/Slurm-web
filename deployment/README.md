@@ -81,14 +81,14 @@ make verify NAMESPACE=slurm-web
 export REGISTRY="my-registry.example.com"
 
 # 建置 Gateway image
-docker build -f deployment/docker/gateway.Dockerfile -t ${REGISTRY}/slurm-web-gateway:mvp .
+docker build -f deployment/docker/gateway.Dockerfile -t ${REGISTRY}/slurm-web:gateway-mvp .
 
 # 建置 Agent image
-docker build -f deployment/docker/agent.Dockerfile -t ${REGISTRY}/slurm-web-agent:mvp .
+docker build -f deployment/docker/agent.Dockerfile -t ${REGISTRY}/slurm-web:agent-mvp .
 
 # 推送到 Registry
-docker push ${REGISTRY}/slurm-web-gateway:mvp
-docker push ${REGISTRY}/slurm-web-agent:mvp
+docker push ${REGISTRY}/slurm-web:gateway-mvp
+docker push ${REGISTRY}/slurm-web:agent-mvp
 ```
 
 ### 步驟 2: 配置 values.yaml
@@ -98,12 +98,12 @@ docker push ${REGISTRY}/slurm-web-agent:mvp
 ```yaml
 # 更新 container image 位置
 gateway:
-  image: "YOUR-REGISTRY/slurm-web-gateway:mvp"
+  image: "YOUR-REGISTRY/slurm-web:gateway-mvp"
   ingress:
     host: "slurm-web.your-domain.com"  # 修改為您的域名
 
 agent:
-  image: "YOUR-REGISTRY/slurm-web-agent:mvp"
+  image: "YOUR-REGISTRY/slurm-web:agent-mvp"
   slurmrestd:
     uri: "http://slurm-restapi.slurm-namespace.svc.cluster.local:6820"  # 修改為實際的 Slurm API 服務
 

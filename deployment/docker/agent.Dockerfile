@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Slurm-web Agent (MVP)
 # Stage 1: Build Python dependencies
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim-bookworm AS builder
 WORKDIR /build
 
 # Install build dependencies
@@ -17,7 +17,7 @@ COPY slurmweb/ ./slurmweb/
 RUN pip install --no-cache-dir --user .[agent]
 
 # Stage 2: Final runtime image
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Install runtime dependencies only
 RUN apt-get update && \

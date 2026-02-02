@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Slurm-web Gateway (MVP)
 # Stage 1: Build Python backend dependencies
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim-bookworm AS builder
 WORKDIR /build
 
 # Install build dependencies for Python packages
@@ -31,7 +31,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 3: Final runtime image
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Install runtime dependencies only
 RUN apt-get update && \

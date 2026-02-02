@@ -4,7 +4,7 @@
 # Gateway configuration
 gateway:
   # Container image settings
-  image: "my-registry/slurm-web-gateway:mvp"
+  image: "my-registry/slurm-web:gateway-mvp"
   pullPolicy: IfNotPresent
 
   # Replica count (MVP: single instance)
@@ -41,7 +41,7 @@ gateway:
 # Agent configuration
 agent:
   # Container image settings
-  image: "my-registry/slurm-web-agent:mvp"
+  image: "my-registry/slurm-web:agent-mvp"
   pullPolicy: IfNotPresent
 
   # Replica count (MVP: single instance)

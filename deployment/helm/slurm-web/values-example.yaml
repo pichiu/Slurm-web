@@ -2,7 +2,7 @@
 # Copy this file and customize for your environment
 
 gateway:
-  image: "my-registry.example.com/slurm-web-gateway:mvp"
+  image: "my-registry.example.com/slurm-web:gateway-mvp"
   pullPolicy: IfNotPresent
   replicaCount: 1
 
@@ -32,7 +32,7 @@ gateway:
       cpu: "500m"
 
 agent:
-  image: "my-registry.example.com/slurm-web-agent:mvp"
+  image: "my-registry.example.com/slurm-web:agent-mvp"
   pullPolicy: IfNotPresent
   replicaCount: 1
 

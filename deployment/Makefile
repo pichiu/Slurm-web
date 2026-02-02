@@ -7,11 +7,7 @@
 
 # Container Registry
 REGISTRY ?= your-registry.example.com
-IMAGE_PREFIX ?= slurm-web
-
-# Image Tags
-GATEWAY_IMAGE ?= $(REGISTRY)/$(IMAGE_PREFIX)-gateway
-AGENT_IMAGE ?= $(REGISTRY)/$(IMAGE_PREFIX)-agent
+IMAGE_NAME ?= $(REGISTRY)/slurm-web
 TAG ?= mvp
 
 # Helm Configuration
@@ -44,18 +40,18 @@ help: ## 顯示說明
 
 .PHONY: build-gateway
 build-gateway: ## 建置 Gateway 映像檔
-	@echo "Building Gateway image: $(GATEWAY_IMAGE):$(TAG)"
+	@echo "Building image: $(IMAGE_NAME):gateway-$(TAG)"
 	docker build \
 		-f $(DOCKER_DIR)/gateway.Dockerfile \
-		-t $(GATEWAY_IMAGE):$(TAG) \
+		-t $(IMAGE_NAME):gateway-$(TAG) \
 		$(BUILD_CONTEXT)
 
 .PHONY: build-agent
 build-agent: ## 建置 Agent 映像檔
-	@echo "Building Agent image: $(AGENT_IMAGE):$(TAG)"
+	@echo "Building image: $(IMAGE_NAME):agent-$(TAG)"
 	docker build \
 		-f $(DOCKER_DIR)/agent.Dockerfile \
-		-t $(AGENT_IMAGE):$(TAG) \
+		-t $(IMAGE_NAME):agent-$(TAG) \
 		$(BUILD_CONTEXT)
 
 .PHONY: build-all
@@ -63,13 +59,13 @@ build-all: build-gateway build-agent ## 建置所有映像檔
 
 .PHONY: push-gateway
 push-gateway: ## 推送 Gateway 映像檔
-	@echo "Pushing Gateway image: $(GATEWAY_IMAGE):$(TAG)"
-	docker push $(GATEWAY_IMAGE):$(TAG)
+	@echo "Pushing image: $(IMAGE_NAME):gateway-$(TAG)"
+	docker push $(IMAGE_NAME):gateway-$(TAG)
 
 .PHONY: push-agent
 push-agent: ## 推送 Agent 映像檔
-	@echo "Pushing Agent image: $(AGENT_IMAGE):$(TAG)"
-	docker push $(AGENT_IMAGE):$(TAG)
+	@echo "Pushing image: $(IMAGE_NAME):agent-$(TAG)"
+	docker push $(IMAGE_NAME):agent-$(TAG)
 
 .PHONY: push-all
 push-all: push-gateway push-agent ## 推送所有映像檔
@@ -97,10 +93,8 @@ helm-template: ## 產生 Helm 模板（不部署）
 	helm template $(HELM_RELEASE) $(HELM_CHART) \
 		--namespace $(NAMESPACE) \
 		--values $(VALUES_FILE) \
-		--set gateway.image.repository=$(GATEWAY_IMAGE) \
-		--set gateway.image.tag=$(TAG) \
-		--set agent.image.repository=$(AGENT_IMAGE) \
-		--set agent.image.tag=$(TAG)
+		--set gateway.image=$(IMAGE_NAME):gateway-$(TAG) \
+		--set agent.image=$(IMAGE_NAME):agent-$(TAG)
 
 .PHONY: helm-dry-run
 helm-dry-run: ## Helm 試運行（模擬安裝）
@@ -109,10 +103,8 @@ helm-dry-run: ## Helm 試運行（模擬安裝）
 		--namespace $(NAMESPACE) \
 		--create-namespace \
 		--values $(VALUES_FILE) \
-		--set gateway.image.repository=$(GATEWAY_IMAGE) \
-		--set gateway.image.tag=$(TAG) \
-		--set agent.image.repository=$(AGENT_IMAGE) \
-		--set agent.image.tag=$(TAG) \
+		--set gateway.image=$(IMAGE_NAME):gateway-$(TAG) \
+		--set agent.image=$(IMAGE_NAME):agent-$(TAG) \
 		--dry-run
 
 .PHONY: deploy
@@ -122,10 +114,8 @@ deploy: create-namespace ## 部署到 Kubernetes
 		--namespace $(NAMESPACE) \
 		--create-namespace \
 		--values $(VALUES_FILE) \
-		--set gateway.image.repository=$(GATEWAY_IMAGE) \
-		--set gateway.image.tag=$(TAG) \
-		--set agent.image.repository=$(AGENT_IMAGE) \
-		--set agent.image.tag=$(TAG) \
+		--set gateway.image=$(IMAGE_NAME):gateway-$(TAG) \
+		--set agent.image=$(IMAGE_NAME):agent-$(TAG) \
 		--wait \
 		--timeout 5m
 
@@ -135,10 +125,8 @@ upgrade: ## 更新 Helm Release
 	helm upgrade $(HELM_RELEASE) $(HELM_CHART) \
 		--namespace $(NAMESPACE) \
 		--values $(VALUES_FILE) \
-		--set gateway.image.repository=$(GATEWAY_IMAGE) \
-		--set gateway.image.tag=$(TAG) \
-		--set agent.image.repository=$(AGENT_IMAGE) \
-		--set agent.image.tag=$(TAG) \
+		--set gateway.image=$(IMAGE_NAME):gateway-$(TAG) \
+		--set agent.image=$(IMAGE_NAME):agent-$(TAG) \
 		--wait \
 		--timeout 5m
 
