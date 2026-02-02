@@ -9,7 +9,9 @@ RUN apt-get update && \
         gcc \
         pkg-config \
         libcairo2-dev \
-        libgirepository-2.0-dev && \
+        libgirepository-2.0-dev \
+        libldap2-dev \
+        libsasl2-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy Python project files
@@ -28,6 +30,8 @@ RUN apt-get update && \
         libcairo2 \
         libgirepository-2.0-0 \
         gir1.2-glib-2.0 \
+        libldap-common \
+        libsasl2-2 \
         ca-certificates \
         curl && \
     rm -rf /var/lib/apt/lists/*
