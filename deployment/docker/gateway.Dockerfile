@@ -26,7 +26,9 @@ WORKDIR /frontend
 COPY frontend/package*.json ./
 RUN npm ci
 
-# Build frontend
+# Build frontend (symlinks in public/logo/ and public/favicon.ico
+# point to ../../assets/ via relative paths resolving to /assets/)
+COPY assets/ /assets/
 COPY frontend/ ./
 RUN npm run build
 
