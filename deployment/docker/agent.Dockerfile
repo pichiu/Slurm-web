@@ -1,14 +1,15 @@
 # Multi-stage Dockerfile for Slurm-web Agent (MVP)
 # Stage 1: Build Python dependencies
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.11-slim AS builder
 WORKDIR /build
 
-# Install build dependencies
+# Install build dependencies (pygobject requires girepository-2.0 from Trixie)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         gcc \
         pkg-config \
-        libcairo2-dev && \
+        libcairo2-dev \
+        libgirepository-2.0-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy Python project files
@@ -19,12 +20,14 @@ COPY slurmweb/ ./slurmweb/
 RUN pip install --no-cache-dir --user .[agent]
 
 # Stage 2: Final runtime image
-FROM python:3.11-slim-bookworm
+FROM python:3.11-slim
 
 # Install runtime dependencies only
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libcairo2 \
+        libgirepository-2.0-0 \
+        gir1.2-glib-2.0 \
         ca-certificates \
         curl && \
     rm -rf /var/lib/apt/lists/*
