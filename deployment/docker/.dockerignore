@@ -80,10 +80,6 @@ _bmad-output/
 .claude/
 .gemini/
 
-# Assets (keep logo/ and favicon/ for frontend symlinks)
-assets/*
-!assets/logo/
-!assets/favicon/
 
 # Temporary files
 *.tmp

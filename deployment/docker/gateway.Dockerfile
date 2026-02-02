@@ -26,10 +26,6 @@ WORKDIR /frontend
 COPY frontend/package*.json ./
 RUN npm ci
 
-# Copy assets that frontend symlinks reference
-COPY assets/logo/bitmaps/ /assets/logo/bitmaps/
-COPY assets/favicon/ /assets/favicon/
-
 # Build frontend
 COPY frontend/ ./
 RUN npm run build
